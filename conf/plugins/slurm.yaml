@@ -1,3 +1,0 @@
-slurm:
-  _target_: lightning.pytorch.plugins.environments.SLURMEnvironment
-  auto_requeue: true
