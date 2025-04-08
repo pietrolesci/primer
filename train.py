@@ -5,7 +5,7 @@ from pathlib import Path
 import hydra
 import torch
 from lightning import Trainer, seed_everything
-from lightning.pytorch.plugins.environments import SLURMEnvironment
+from lightning.fabric.plugins.environments.slurm import SLURMEnvironment
 from omegaconf import DictConfig, OmegaConf
 from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
@@ -20,7 +20,7 @@ SEP_LINE = f"{'=' * 80}"
 logger = logging.getLogger("hydra")
 
 
-@hydra.main(version_base=None, config_path="../conf", config_name="train_conf")
+@hydra.main(version_base=None, config_path="conf", config_name="train_conf")
 def main(cfg: DictConfig) -> None:
     start_time = time.perf_counter()
     OmegaConf.resolve(cfg)
@@ -28,11 +28,11 @@ def main(cfg: DictConfig) -> None:
     logger.info(f"\n{OmegaConf.to_yaml(cfg)}\n{SEP_LINE}")
 
     # Load tokenizer
-    tok_path = Path(cfg.tok_path)
-    logger.info(f"Loading tokenizer from {tok_path=}")
-    tok: PreTrainedTokenizerFast = AutoTokenizer.from_pretrained(str(tok_path))  # type: ignore
-    tok.eos_token_id = 0
-    tok.pad_token_id = 0
+    logger.info(
+        f"Loading tokenizer from {cfg.tok_path=} {'subfolder=' + cfg.tok_subfolder if cfg.tok_subfolder else ''}"
+    )
+    tok: PreTrainedTokenizerFast = AutoTokenizer.from_pretrained(cfg.tok_path, subfolder=cfg.tok_subfolder)  # type: ignore
+    assert isinstance(tok.eos_token_id, int), "Tokenizer must have an eos_token_id of type int"
 
     # Load model
     model, config = get_model(cfg.model, tok)
@@ -59,6 +59,7 @@ def main(cfg: DictConfig) -> None:
     optim_config = OptimCofig(**conf_to_dict(cfg.optim))  # type: ignore
     module = LanguageModel(model, config, optim_config)  # type: ignore
 
+    # Check if we are in a SLURM environment
     env = SLURMEnvironment()
     plugins = []
     if env.detect():

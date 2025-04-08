@@ -25,7 +25,7 @@
   description = "A small library to pre-train language models"
   name = "primer"
   readme = "README.md"
-  requires-python = ">=3.10,<3.12"
+  requires-python = ">=3.11,<3.12"
   version = "0.1.0"
 
 [build-system]
@@ -83,8 +83,8 @@
   # Same as Black.
   line-length = 120
 
-  # Assume Python 3.10
-  target-version = "py310"
+  # Assume Python 3.11
+  target-version = "py311"
 
 
 [tool.ruff.format]
