@@ -14,6 +14,7 @@ import polars as pl
 import srsly
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
+from rich import print
 
 
 def set_hf_paths() -> None:
@@ -26,6 +27,13 @@ def set_hf_paths() -> None:
     os.environ["TORCH_HOME"] = CACHE_PATH
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+
+    # Print the environment variables
+    print("HF_HOME:", os.environ["HF_HOME"])
+    print("HF_DATASETS_CACHE:", os.environ["HF_DATASETS_CACHE"])
+    print("TORCH_HOME:", os.environ["TORCH_HOME"])
+    print("TOKENIZERS_PARALLELISM:", os.environ["TOKENIZERS_PARALLELISM"])
+    print("HF_HUB_ENABLE_HF_TRANSFER:", os.environ["HF_HUB_ENABLE_HF_TRANSFER"])
 
 
 @contextmanager

@@ -5,7 +5,7 @@ from typing import Literal
 from lightning import LightningModule, Trainer
 from lightning.pytorch.callbacks import ModelCheckpoint as _ModelCheckpoint
 
-from src.utilities import get_logger
+from primer.utilities import get_logger
 
 logger = get_logger("model_checkpoint")
 

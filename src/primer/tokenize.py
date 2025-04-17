@@ -1,9 +1,7 @@
 import os
 import shutil
 from pathlib import Path
-from typing import Annotated
 
-import typer
 from datatrove.data import DocumentsPipeline
 from datatrove.executor.local import LocalPipelineExecutor
 from datatrove.pipeline.base import PipelineStep
@@ -14,9 +12,16 @@ from huggingface_hub import HfApi
 from rich import print
 from transformers import AutoTokenizer  # type: ignore
 
-from src.utilities import track_time
 
-app = typer.Typer()
+def upload_folder(local_path: str | Path, repo_id: str, path_in_repo: str) -> None:
+    assert Path(local_path).exists(), f"Local path {local_path} does not exist"
+
+    api = HfApi()
+    api.create_repo(repo_id, exist_ok=True, repo_type="dataset")
+    print(f"🗂️ Repo created at {repo_id}")
+
+    api.upload_folder(repo_id=repo_id, folder_path=str(local_path), path_in_repo=path_in_repo, repo_type="dataset")
+    print(f"✅ Successfully uploaded to {repo_id}/{path_in_repo}")
 
 
 # Define datatrove `Pipeline` component
@@ -91,45 +96,7 @@ def tokenize_fn(
     if target_repo_id is not None:
         path_in_repo = tok_path.replace("/", "__") + ("/" + subfolder if subfolder else "")
         print(f"{target_repo_id=} has been specified. 🆙 Uploading to {target_repo_id}/{path_in_repo}")
-
-        api = HfApi()
-        api.create_repo(target_repo_id, exist_ok=True, repo_type="dataset")
-        print(f"🗂️ Repo created at {target_repo_id}")
-
-        api.upload_folder(
-            repo_id=target_repo_id, folder_path=str(out_path), path_in_repo=path_in_repo, repo_type="dataset"
-        )
-        print(f"✅ Successfully uploaded to {target_repo_id}/{path_in_repo}")
+        upload_folder(out_path, target_repo_id, path_in_repo)
 
     print("Cleaning up ./.datatrove cache")
     shutil.rmtree(".datatrove", ignore_errors=True)
-
-
-@app.command()
-def finewebedu(
-    out_path: str,
-    tok_path: str = "meta-llama/Llama-3.2-1B",
-    subfolder: Annotated[str, typer.Option()] = None,  # type: ignore
-    num_tasks: Annotated[int, typer.Option()] = None,  # type: ignore
-    target_repo_id: Annotated[str, typer.Option()] = None,  # type: ignore
-    debug: Annotated[bool, typer.Option()] = False,
-) -> None:
-    SOURCE_REPO_URL = "hf://datasets/pietrolesci/finewebedu-20B/data"
-
-    with track_time("Tokenizing finewebedu"):
-        tokenize_fn(
-            out_path=out_path,
-            source_repo_url=SOURCE_REPO_URL,
-            text_key="text",
-            id_key="id",
-            tok_path=tok_path,
-            subfolder=subfolder,
-            batch_size=1000,
-            num_tasks=num_tasks,
-            debug=debug,
-            target_repo_id=target_repo_id,
-        )
-
-
-if __name__ == "__main__":
-    app()

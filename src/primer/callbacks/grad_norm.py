@@ -4,7 +4,7 @@ from lightning.pytorch.utilities.grads import grad_norm
 from torch import Tensor
 from torch.optim.optimizer import Optimizer
 
-from src.trainer import TensorBoardLogger
+from primer.trainer import TensorBoardLogger
 
 
 class GradNorm(Callback):

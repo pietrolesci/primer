@@ -11,7 +11,7 @@ from lightning.pytorch import LightningDataModule
 from torch.utils.data import Dataset as TorchDataset
 from torchdata.stateful_dataloader import StatefulDataLoader
 
-from src.utilities import DictConfig, get_logger
+from primer.utilities import DictConfig, get_logger
 
 logger = get_logger("data")
 

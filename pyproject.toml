@@ -21,7 +21,7 @@
     "torch>=2.6.0",
     "torchdata>=0.11.0",
     "transformers>=4.48.0",
-    "typer>=0.15.2",
+    "rich>=13.6.0",
 ]
   description = "A small library to pre-train language models"
   name = "primer"
@@ -34,7 +34,7 @@
   requires      = [ "hatchling" ]
 
 [tool.hatch.build.targets.wheel]
-  packages = [ "src" ]
+  packages = [ "src/primer" ]
 
 [project.optional-dependencies]
   flash    = [ "flash-attn>=2.7.4" ]

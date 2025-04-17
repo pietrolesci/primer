@@ -4,7 +4,7 @@ from lightning.pytorch.callbacks.callback import Callback
 from lightning.pytorch.utilities.model_helpers import is_overridden
 from torch import Tensor
 
-from src.utilities import get_logger
+from primer.utilities import get_logger
 
 logger = get_logger("grad_accum")
 

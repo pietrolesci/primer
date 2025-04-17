@@ -1,7 +1,7 @@
 import importlib.util
 
 from lightning import seed_everything
-from transformers import PreTrainedTokenizerFast
+from transformers import PreTrainedTokenizerFast  # type: ignore
 from transformers.configuration_utils import PretrainedConfig
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import LlamaForCausalLM

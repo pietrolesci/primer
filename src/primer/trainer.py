@@ -9,11 +9,11 @@ from tbparse import SummaryReader
 from torch import Tensor
 from torch.nn.functional import cross_entropy
 from torch.optim.adamw import AdamW
-from transformers import AutoModelForCausalLM, PretrainedConfig, PreTrainedModel
+from transformers import AutoModelForCausalLM, PretrainedConfig, PreTrainedModel  # type: ignore
 from transformers.models.llama.modeling_llama import LlamaForCausalLM
 from transformers.optimization import TYPE_TO_SCHEDULER_FUNCTION, get_scheduler
 
-from src.utilities import DictConfig, get_logger
+from primer.utilities import DictConfig, get_logger
 
 logger = get_logger("trainer")
 
