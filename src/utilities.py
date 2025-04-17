@@ -1,7 +1,10 @@
 # import json
 import copy
 import logging
-from collections.abc import Iterator
+import os
+import time
+from collections.abc import Generator, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -11,6 +14,29 @@ import polars as pl
 import srsly
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
+
+
+def set_hf_paths() -> None:
+    # Set this here in order to have effect
+    # See: https://github.com/huggingface/transformers/issues/25305#issuecomment-1852931139
+    # os.environ["TRANSFORMERS_CACHE"] = "./.huggingface_cache"
+    CACHE_PATH = "./.huggingface_cache"
+    os.environ["HF_HOME"] = CACHE_PATH
+    os.environ["HF_DATASETS_CACHE"] = CACHE_PATH
+    os.environ["TORCH_HOME"] = CACHE_PATH
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+
+
+@contextmanager
+def track_time(desc: str, task_name: str = "task") -> Generator[None, Any, None]:
+    print(desc)
+    start_time = time.time()
+    try:
+        yield
+    finally:
+        elapsed_time = time.time() - start_time
+        print(f"⏱️ task=`{task_name}` completed in {elapsed_time:.2f} seconds")
 
 
 @dataclass

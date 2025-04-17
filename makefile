@@ -1,4 +1,4 @@
-sources = src/ scripts/
+sources = src/ scripts/ train.py
 
 format:
 	uv run ruff format $(sources)

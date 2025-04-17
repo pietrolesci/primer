@@ -21,7 +21,8 @@
     "torch>=2.6.0",
     "torchdata>=0.11.0",
     "transformers>=4.48.0",
-  ]
+    "typer>=0.15.2",
+]
   description = "A small library to pre-train language models"
   name = "primer"
   readme = "README.md"
