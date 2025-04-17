@@ -21,10 +21,9 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv self update
 ```
 
-Then, install the dependencies. Because of flash attention we do a two step installation process —
-see [`uv` docs](https://docs.astral.sh/uv/concepts/projects/config/#build-isolation)
+Then, install the dependencies. Because of flash attention we do a two step installation process—see [`uv` docs](https://docs.astral.sh/uv/concepts/projects/config/#build-isolation)
 
 ```bash
 uv sync
-uv sync --extra flash  # if you also want flash-attention
+uv sync --all-extras
 ```

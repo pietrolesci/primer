@@ -23,7 +23,7 @@ def get_model(name: str, tok: PreTrainedTokenizerFast) -> tuple[LlamaForCausalLM
     }
     seed_everything(42)
 
-    if name == "me57M-tied":
+    if name in ("llama57M", "llama57M-tied"):
         config = LlamaConfig(
             model_type="llama",
             hidden_act="silu",
@@ -32,7 +32,7 @@ def get_model(name: str, tok: PreTrainedTokenizerFast) -> tuple[LlamaForCausalLM
             num_attention_heads=24,
             num_key_value_heads=24,
             num_hidden_layers=6,
-            tie_word_embeddings=True,
+            tie_word_embeddings=name.endswith("tied"),
             initializer_range=0.02,
             attention_bias=False,
             attention_dropout=0.0,
@@ -44,7 +44,7 @@ def get_model(name: str, tok: PreTrainedTokenizerFast) -> tuple[LlamaForCausalLM
             **kwargs,
         )
 
-    elif name in ("me100M", "me100M-tied"):
+    elif name in ("llama100M", "llama100M-tied"):
         # https://huggingface.co/HuggingFaceTB/SmolLM2-135M-intermediate-checkpoints/blob/step-1200000/config.json
         config = LlamaConfig(
             model_type="llama",

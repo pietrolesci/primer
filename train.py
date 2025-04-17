@@ -7,12 +7,12 @@ import torch
 from lightning import Trainer, seed_everything
 from lightning.fabric.plugins.environments.slurm import SLURMEnvironment
 from omegaconf import DictConfig, OmegaConf
-from transformers import AutoTokenizer, PreTrainedTokenizerFast
+from transformers import AutoTokenizer, PreTrainedTokenizerFast  # type: ignore
 
-from src.data import DataloaderConfig, DataModule
-from src.model import get_model
-from src.trainer import LanguageModel, OptimCofig, TensorBoardLogger
-from src.utilities import conf_to_dict, instantiate_from_conf
+from primer.data import DataloaderConfig, DataModule
+from primer.model import get_model
+from primer.trainer import LanguageModel, OptimCofig, TensorBoardLogger
+from primer.utilities import conf_to_dict, instantiate_from_conf
 
 SEP_LINE = f"{'=' * 80}"
 
