@@ -1,4 +1,4 @@
 grad_accum:
-  _target_: src.callbacks.gradient_accumulation.GradientAccumulationScheduler
+  _target_: primer.callbacks.gradient_accumulation.GradientAccumulationScheduler
   scheduling:
     0: 1

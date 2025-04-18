@@ -1,2 +1,2 @@
 speed_monitor:
-  _target_: src.callbacks.speed_monitor.SpeedMonitor
+  _target_: primer.callbacks.speed_monitor.SpeedMonitor

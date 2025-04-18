@@ -1,5 +1,5 @@
 grad_norm:
-  _target_: src.callbacks.grad_norm.GradNorm
+  _target_: primer.callbacks.grad_norm.GradNorm
   norm_type: 2
   group_separator: '/'
   histogram_freq: null

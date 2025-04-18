@@ -15,6 +15,7 @@ import srsly
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 from rich import print
+from rich.logging import RichHandler
 
 
 def set_hf_paths() -> None:
@@ -80,6 +81,26 @@ def get_logger(name: str, level: Literal["error", "warning", "info", "debug"] = 
     )
     logger.addHandler(handler)
     logger.propagate = False
+    return logger
+
+
+def add_rich_handler(logger: logging.Logger) -> logging.Logger:
+    """
+    Adds a RichHandler to the given logger.
+
+    Args:
+        logger (logging.Logger): The logger to which the RichHandler will be added.
+
+    Returns:
+        logging.Logger: The logger with the RichHandler added.
+    """
+    # Check if a RichHandler is already added to avoid duplicates
+    if not any(isinstance(handler, RichHandler) for handler in logger.handlers):
+        rich_handler = RichHandler()
+        logger.addHandler(rich_handler)
+        logger.setLevel(logging.DEBUG)  # Set the desired log level
+        logger.propagate = False  # Prevent log propagation to parent loggers
+        logger.info("RichHandler successfully added to the logger.")
     return logger
 
 
