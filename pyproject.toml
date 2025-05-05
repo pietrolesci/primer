@@ -18,7 +18,7 @@
     "srsly>=2.4.8",
     "tbparse>=0.0.9",
     "tensorboard>=2.17.1",
-    "torch>=2.6.0",
+    "torch>=2.6.0,<2.7.0",
     "torchdata>=0.11.0",
     "transformers>=4.48.0",
     "rich>=13.6.0",
