@@ -51,18 +51,20 @@ class PackedTokenDataset(TorchDataset):
         """Precompute offsets using NumPy for fast cumulative sums."""
         if "num_tokens" in self.dataset.column_names:
             # Use the precomputed number of tokens if available
-            doc_lengths = self.dataset.with_format("numpy", columns=["num_tokens"])["num_tokens"]
+            doc_lens: np.ndarray = self.dataset.with_format("numpy", columns=["num_tokens"])["num_tokens"]  # type: ignore
         else:
-            doc_lengths = self.dataset.map(
-                lambda x: {"num_tokens": [len(s) + 1 for s in x["input_ids"]]},  # +1 for EOD
+            doc_lens: np.ndarray = self.dataset.map(
+                lambda x: {"num_tokens": [len(s) for s in x["input_ids"]]},
                 desc="Computing offsets",
                 num_proc=min(8, cpu_count()),  # type: ignore
                 load_from_cache_file=False,
                 remove_columns=self.dataset.column_names,
                 keep_in_memory=True,
                 batched=True,
-            ).with_format("numpy", columns=["num_tokens"])["num_tokens"]
-        offsets = np.cumsum(doc_lengths)
+            ).with_format("numpy", columns=["num_tokens"])["num_tokens"]  # type: ignore
+        
+        doc_lens = doc_lens + 1  # Add 1 for EOD token
+        offsets = np.cumsum(doc_lens)
         return np.insert(offsets, 0, 0)
 
     def _find_document(self, pos: int) -> int:
