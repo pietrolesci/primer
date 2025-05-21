@@ -65,7 +65,11 @@ def main(cfg: DictConfig) -> None:
     trainer = Trainer(**conf_to_dict(cfg.trainer), logger=loggers, callbacks=callbacks, plugins=plugins)
 
     # Train
-    ckpt_path = cfg.resume_from_checkpoint if Path(cfg.resume_from_checkpoint).exists() else None
+    ckpt_path = None
+    if cfg.resume_from_checkpoint is not None:
+        ckpt_path = Path(cfg.resume_from_checkpoint)
+        assert ckpt_path.exists(), f"Checkpoint path {ckpt_path} does not exist"
+
     with track_time("Training"):
         seed_everything(cfg.seed)
         torch.set_float32_matmul_precision("high")
