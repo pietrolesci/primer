@@ -29,9 +29,11 @@ def get_model(model_config: dict, tok: PreTrainedTokenizerFast) -> tuple[LlamaFo
     model_config = {**kwargs, **model_config}
     config = LlamaConfig(**model_config)
     model = LlamaForCausalLM(config)
-    logger.info(f"Model config:\n{model.config.to_json_string()}")
-    logger.info(f"Attention implementation: {model.config._attn_implementation}")
-    logger.info(f"Memory footprint: {model.get_memory_footprint() / 1e6:.2f}MB")
-    logger.info(f"Num parameters: {model.num_parameters() / 1e6:.1f}M")
+    logger.info(
+        f"Model config:\n{model.config.to_json_string()}\n"
+        f"Attention implementation: {model.config._attn_implementation}\n"
+        f"Memory footprint: {model.get_memory_footprint() / 1e6:.2f}MB\n"
+        f"Num parameters: {model.num_parameters() / 1e6:.1f}M"
+    )
 
     return model, config
