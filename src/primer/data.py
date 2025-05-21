@@ -17,9 +17,14 @@ logger = get_logger("data")
 
 
 class PackedTokenDataset(TorchDataset):
-    def __init__(self, data_path: str | Path, seq_len: int, eod_token_id: int = 0) -> None:
+    def __init__(
+        self, data_path: str | Path, seq_len: int, eod_token_id: int = 0, shuffle_seed: int | None = None
+    ) -> None:
         """
         A map-style dataset that packs tokenized documents into fixed-length sequences.
+
+        The packing works by concatenating documents sequentially (in the order they are in the dataset). Once
+        the sequences are formed, then the are potentially shuffled.
 
         Args:
             data_path (str | Path): Path to dataset dict.
@@ -33,19 +38,51 @@ class PackedTokenDataset(TorchDataset):
         # Read datasets
         self.dataset: Dataset = load_from_disk(str(self.data_path))  # type: ignore
 
+        # ==== doc_idx
+        # Possibly shuffle the documents
+        doc_idx_path = self.data_path / f"doc_idx_{shuffle_seed or 'none'}.npy"
+        if doc_idx_path.exists():
+            logger.info(f"Loaded document shuffling indices from {doc_idx_path}")
+            self.doc_idx = np.load(doc_idx_path)
+        else:
+            logger.info(f"Computing document indices and saving to {doc_idx_path}")
+            self.doc_idx = np.arange(len(self.dataset))
+            if shuffle_seed is not None:
+                logger.info(f"{shuffle_seed=} therefore shuffling the documents")
+                rng = np.random.default_rng(shuffle_seed)
+                rng.shuffle(self.doc_idx)
+            np.save(doc_idx_path, self.doc_idx)
+
+        # ==== offsets
         # Precompute document offsets using NumPy for fast cumulative sums
-        offsets_path = self.data_path / "offsets.npy"
+        offsets_path = self.data_path / f"offsets_{shuffle_seed or 'none'}.npy"
         if offsets_path.exists():
+            logger.info(f"Loaded offsets from {offsets_path}")
             self.offsets = np.load(offsets_path)
         else:
+            logger.info(f"Computing offsets and saving to {offsets_path}")
             self.offsets = self._compute_offsets()
             np.save(offsets_path, self.offsets)
 
         self.total_tokens = self.offsets[-1]
 
         # Calculate total number of sequences
-        # self.num_sequences = (self.total_tokens + seq_len - 1) // seq_len
         self.num_sequences = self.total_tokens // seq_len  # Drops remainder of tokens that do not fill seq_len
+
+        # ==== seq_idx
+        # Maybe shuffle the sequencesù
+        seq_idx_path = self.data_path / f"seq_idx_{shuffle_seed or 'none'}.npy"
+        if seq_idx_path.exists():
+            logger.info(f"Loaded sequence shuffling indices from {seq_idx_path}")
+            self.seq_idx = np.load(seq_idx_path)
+        else:
+            logger.info(f"Computing sequence shuffling indices and saving to {seq_idx_path}")
+            self.seq_idx = np.arange(self.num_sequences)
+            if shuffle_seed is not None:
+                logger.info(f"{shuffle_seed=} therefore shuffling the sequences")
+                rng = np.random.default_rng(shuffle_seed)
+                rng.shuffle(self.seq_idx)
+            np.save(seq_idx_path, self.seq_idx)
 
     def _compute_offsets(self) -> np.ndarray:
         """Precompute offsets using NumPy for fast cumulative sums."""
@@ -62,7 +99,8 @@ class PackedTokenDataset(TorchDataset):
                 keep_in_memory=True,
                 batched=True,
             ).with_format("numpy", columns=["num_tokens"])["num_tokens"]  # type: ignore
-        
+
+        doc_lens = doc_lens[self.doc_idx]  # Reorder document lengths based on shuffled document indices
         doc_lens = doc_lens + 1  # Add 1 for EOD token
         offsets = np.cumsum(doc_lens)
         return np.insert(offsets, 0, 0)
@@ -108,8 +146,12 @@ class PackedTokenDataset(TorchDataset):
         """Return the total number of sequences."""
         return self.num_sequences
 
-    def __getitem__(self, index: int) -> torch.Tensor:
+    def __getitem__(self, idx: int) -> torch.Tensor:
         """Retrieve the sequence at the given index."""
+
+        # Possibly shuffle at the sequence level
+        index = self.seq_idx[idx]
+
         start_pos = index * self.seq_len
         end_pos = start_pos + self.seq_len
         return self.get_sequence(start_pos, end_pos)
