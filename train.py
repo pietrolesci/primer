@@ -65,10 +65,12 @@ def main(cfg: DictConfig) -> None:
     trainer = Trainer(**conf_to_dict(cfg.trainer), logger=loggers, callbacks=callbacks, plugins=plugins)
 
     # Train
-    ckpt_path = None
-    if cfg.resume_from_checkpoint is not None:
-        ckpt_path = Path(cfg.resume_from_checkpoint)
-        assert ckpt_path.exists(), f"Checkpoint path {ckpt_path} does not exist"
+    ckpt_path = Path(cfg.resume_from_checkpoint) if cfg.resume_from_checkpoint else None
+    if ckpt_path and ckpt_path.exists():
+        logger.info(
+            f"Checkpoint path {ckpt_path} does not exist (yet). If you are running for the first time "
+            "this is fine. Next time you run, this will be the path to the last checkpoint."
+        )
 
     with track_time("Training"):
         seed_everything(cfg.seed)
