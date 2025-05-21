@@ -34,10 +34,6 @@ def main(cfg: DictConfig) -> None:
 
     # Load model
     model, config = get_model(cfg.model, tok)
-    logger.info(f"Model config:\n{model.config.to_json_string()}")
-    logger.info(f"Attention implementation: {model.config._attn_implementation}")
-    logger.info(f"Memory footprint: {model.get_memory_footprint() / 1e6:.2f} MB")
-    logger.info(f"Num parameters: {model.num_parameters() / 1e6:.1f}M")
 
     # Load datamodule
     dataloader_config = DataloaderConfig(**conf_to_dict(cfg.data))
