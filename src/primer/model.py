@@ -6,9 +6,9 @@ from transformers.configuration_utils import PretrainedConfig
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import LlamaForCausalLM
 
-from primer.utilities import add_rich_handler, get_logger
+from primer.utilities import get_logger
 
-logger = add_rich_handler(get_logger("model"))
+logger = get_logger("model")
 
 
 def get_model(model_config: dict, tok: PreTrainedTokenizerFast) -> tuple[LlamaForCausalLM, PretrainedConfig]:
