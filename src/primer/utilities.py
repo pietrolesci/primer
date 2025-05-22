@@ -105,7 +105,6 @@ def add_rich_handler(logger: logging.Logger) -> logging.Logger:
         logger.addHandler(rich_handler)
         logger.setLevel(logging.DEBUG)  # Set the desired log level
         logger.propagate = False  # Prevent log propagation to parent loggers
-        logger.info("RichHandler successfully added to the logger.")
     return logger
 
 
