@@ -64,6 +64,7 @@ data:
   persistent_workers: false
   prefetch_factor: 2
   multiprocessing_context: null
+  intra_doc_causal_mask: false
 
 optim:
   optim_name: adamw
@@ -76,7 +77,6 @@ optim:
   scheduler_name: warmup_stable_decay # cosine_with_min_lr
   num_warmup_steps: 2000
   scheduler_kwargs:
-    num_stable_steps: 44000
     num_decay_steps: 4000
     min_lr_ratio: 0.01
 
