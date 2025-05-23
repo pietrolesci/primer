@@ -28,7 +28,6 @@ class PackedTokenDataset(TorchDataset):
     # NOTE: hard-coding this since limit is 4,294,967,295. If your data is super big, change this.
     _idx_dtype: np.typing.DTypeLike = np.uint32
 
-    # Directly save the offsets to a memory-mapped file
     # Using uint64 to avoid overflow issues with large datasets (as tokens can easily be in the trillions)
     _offsets_dtype: np.typing.DTypeLike = np.uint64
 
@@ -38,6 +37,7 @@ class PackedTokenDataset(TorchDataset):
         seq_len: int,
         eod_token_id: int = 0,
         shuffle_seed: int | None = None,
+        intra_doc_causal_mask: bool = False,
         num_tokens_col: str | None = None,
     ) -> None:
         """
@@ -50,13 +50,15 @@ class PackedTokenDataset(TorchDataset):
                 If None, no shuffling is performed.
             num_tokens_col (str | None): Column name for the number of tokens in the dataset.
                 If None, it will be computed.
+            intra_doc_causal_mask (bool): Whether to apply a causal mask within individual documents.
+                If True, tokens within the same document will only attend to previous tokens in the sequence.
         """
+        self.data_path = Path(data_path)
         self.seq_len = seq_len + 1  # Add one because during training you need shift by one to compute loss
         self.eod_token_id = eod_token_id
-        self.num_tokens_col = num_tokens_col
         self.shuffle_seed = shuffle_seed
-        self.data_path = Path(data_path)
-
+        self.intra_doc_causal_mask = intra_doc_causal_mask
+        self.num_tokens_col = num_tokens_col
         self.setup()
 
     def setup(self) -> None:
@@ -97,6 +99,9 @@ class PackedTokenDataset(TorchDataset):
         logger.info(f"Loaded sequence shuffling indices from `{seq_idx_path}`")
         self.seq_idx = self._load_memmap(seq_idx_path)
 
+        if self.intra_doc_causal_mask:
+            logger.info("Using intra-document causal attention mask")
+
     def _format_metadata_path(self, filename: str) -> Path:
         suffix = f"seed{self.shuffle_seed}" if self.shuffle_seed is not None else "noshuffle"
         suffix += f"_eod{self.eod_token_id}_seq{self.seq_len}.npy"
@@ -127,6 +132,7 @@ class PackedTokenDataset(TorchDataset):
                 logger.warning(f"Column {self.num_tokens_col=} passed but not found. Recomputing token counts.")
             doc_lens = pl.from_arrow(self.dataset.data.table["input_ids"]).list.len().to_numpy()  # type: ignore
 
+        assert doc_lens.ndim == 1, f"Expected 1D array for document lengths, but got {doc_lens.ndim}D."
         doc_lens = doc_lens + 1  # Add 1 for EOD token
         doc_lens = doc_lens[self.doc_idx]  # Reorder document lengths based on shuffled document indices
 
@@ -140,11 +146,13 @@ class PackedTokenDataset(TorchDataset):
     def _load_memmap(self, path: str | Path, is_offsets: bool = False) -> np.memmap:
         return np.memmap(path, dtype=self._offsets_dtype if is_offsets else self._idx_dtype, mode="r")
 
-    def get_sequence(self, start_pos: int, end_pos: int) -> torch.Tensor:
+    def get_sequence(self, start_pos: int, end_pos: int) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Retrieve a sequence with minimal overhead and fast memory operations."""
         current_tokens = torch.empty(end_pos - start_pos, dtype=torch.long)
         pos = start_pos
         i = 0
+
+        att_mask_doc_ids = torch.empty(self.seq_len, dtype=torch.long) if self.intra_doc_causal_mask else None
 
         while pos < end_pos:
             # Find the relevant document for the current position in the shuffled order using binary search
@@ -169,6 +177,9 @@ class PackedTokenDataset(TorchDataset):
                 input_ids[doc_start : doc_start + tokens_to_copy], dtype=torch.long
             )
 
+            if att_mask_doc_ids is not None:
+                att_mask_doc_ids[i : i + tokens_to_copy] = doc_idx  # Each token gets the document index
+
             # Update counters
             i += tokens_to_copy
             pos += tokens_to_copy
@@ -179,13 +190,25 @@ class PackedTokenDataset(TorchDataset):
                 i += 1
                 pos += 1
 
-        return current_tokens
+        return current_tokens, att_mask_doc_ids
+
+    def build_intra_doc_causal_mask(self, doc_ids: torch.Tensor) -> torch.Tensor:
+        """Intra-document causal attention mask.
+
+        Builds an attention mask where token i can only attend to token j if:
+        - j <= i (causal)
+        - doc_ids[i] == doc_ids[j] (intra-doc)
+        """
+        seq_len = doc_ids.size(0)
+        causal_mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool))
+        doc_mask = doc_ids.unsqueeze(0) == doc_ids.unsqueeze(1)
+        return (causal_mask & doc_mask).long()
 
     def __len__(self) -> int:
         """Return the total number of sequences."""
         return self.num_sequences
 
-    def __getitem__(self, idx: int) -> torch.Tensor:
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         """Retrieve the sequence at the given index."""
         if idx < 0 or idx >= self.num_sequences:
             raise IndexError(f"Sequence index {idx} is out of bounds for dataset with {self.num_sequences} sequences.")
@@ -195,7 +218,12 @@ class PackedTokenDataset(TorchDataset):
         index = int(self.seq_idx[idx])
         start_pos = index * self.seq_len
         end_pos = start_pos + self.seq_len
-        return self.get_sequence(start_pos, end_pos)
+
+        tokens, att_mask = self.get_sequence(start_pos, end_pos)
+        out = {"input_ids": tokens}
+        if att_mask is not None:
+            out["att_mask"] = att_mask  # self.build_intra_doc_causal_mask(att_mask)
+        return out
 
 
 @dataclass
@@ -203,6 +231,9 @@ class DataloaderConfig(DictConfig):
     batch_size: int | None = None
     eval_batch_size: int | None = None
     shuffle_seed: int | None = None
+    intra_doc_causal_mask: bool = False
+
+    # kwargs
     num_workers: int | None = cpu_count()
     pin_memory: bool = True
     drop_last: bool = True
@@ -212,7 +243,11 @@ class DataloaderConfig(DictConfig):
 
     def get_dataloader_kwargs(self) -> dict:
         # Remove batch_size, eval_batch_size, and shuffle_seed from the dataloader configuration
-        kwargs = {k: v for k, v in self.to_dict().items() if k not in ["batch_size", "eval_batch_size", "shuffle_seed"]}
+        kwargs = {
+            k: v
+            for k, v in self.to_dict().items()
+            if k not in ["batch_size", "eval_batch_size", "shuffle_seed", "intra_doc_causal_mask"]
+        }
 
         # NOTE: Shuffling is handled by the PackedTokenDataset to ensure that the sequence-level and
         # document-level shuffling are consistent and reproducible across different runs. This design
@@ -250,13 +285,14 @@ class DataModule(LightningDataModule):
         self.num_tokens_col = num_tokens_col
         self.save_hyperparameters()
 
-    def setup(self, stage: Literal["fit", "validate", "test", "predict"]) -> None:
+    def setup(self, stage: Literal["fit", "validate", "test", "predict"] | None = None) -> None:
         if self.train_data_path:
             self.train_ds = PackedTokenDataset(
                 data_path=str(self.train_data_path),
                 seq_len=self.max_position_embeddings,
                 eod_token_id=self.eod_token_id,
                 shuffle_seed=self.dataloader_config.shuffle_seed,
+                intra_doc_causal_mask=self.dataloader_config.intra_doc_causal_mask,
                 num_tokens_col=self.num_tokens_col,
             )
             logger.info(f"Train dataset loaded: {len(self.train_ds)=}")
@@ -267,6 +303,7 @@ class DataModule(LightningDataModule):
                 data_path=str(self.val_data_path),
                 seq_len=self.max_position_embeddings,
                 eod_token_id=self.eod_token_id,
+                intra_doc_causal_mask=self.dataloader_config.intra_doc_causal_mask,
                 num_tokens_col=self.num_tokens_col,
             )
             logger.info(f"Validation dataset loaded: {len(self.val_ds)=}")

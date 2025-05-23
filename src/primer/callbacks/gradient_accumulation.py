@@ -76,7 +76,11 @@ class GradientAccumulationScheduler(Callback):
                 " callback. Either remove `accumulate_grad_batches` from the Trainer or remove the callback."
             )
 
-    def on_train_batch_start(self, trainer: Trainer, pl_module: LightningModule, batch: Tensor, batch_idx: int) -> None:
+    def on_train_batch_start(
+        self, trainer: Trainer, pl_module: LightningModule, batch: Tensor | dict[str, Tensor], batch_idx: int
+    ) -> None:
+        batch = batch["input_ids"] if isinstance(batch, dict) else batch
+
         self.counter["num_batches"] += 1
         self.counter["num_instances"] += batch.shape[0]
         self.counter["num_tokens"] += batch.numel()

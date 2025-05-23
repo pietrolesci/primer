@@ -67,7 +67,7 @@ class DictConfig:
 
 
 def get_logger(
-    name: str, level: Literal["error", "warning", "info", "debug"] = "info", rich: bool = True
+    name: str, level: Literal["error", "warning", "info", "debug"] = "info", rich: bool = False
 ) -> logging.Logger:
     # Convert the level string to the corresponding logging level
     log_level = getattr(logging, level.upper(), logging.INFO)

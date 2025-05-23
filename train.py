@@ -1,4 +1,3 @@
-import logging
 from pathlib import Path
 
 import hydra
@@ -9,16 +8,14 @@ from omegaconf import DictConfig, OmegaConf
 from transformers import AutoTokenizer, PreTrainedTokenizerFast  # type: ignore
 
 from primer.data import DataloaderConfig, DataModule
-from primer.model import get_model
-from primer.trainer import LanguageModel, OptimCofig, TensorBoardLogger
-from primer.utilities import add_rich_handler, conf_to_dict, instantiate_from_conf, track_time
+from primer.model import LanguageModel, OptimCofig, TensorBoardLogger, get_model_config
+from primer.utilities import conf_to_dict, get_logger, instantiate_from_conf, track_time
 
 SEP_LINE = f"{'=' * 80}"
 
 
 # Configure the logger and configure colorlog
-logger = logging.getLogger("hydra")
-logger = add_rich_handler(logger)
+logger = get_logger("hydra")
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="train_conf")
@@ -32,26 +29,18 @@ def main(cfg: DictConfig) -> None:
     tok: PreTrainedTokenizerFast = AutoTokenizer.from_pretrained(cfg.tok_path, subfolder=cfg.tok_subfolder)  # type: ignore
     assert isinstance(tok.eos_token_id, int), "Tokenizer must have an eos_token_id of type int"
 
-    # Load model
-    model, config = get_model(cfg.model, tok)
+    # Load configs
+    dataloader_config = DataloaderConfig(**conf_to_dict(cfg.data))
+    model_config = get_model_config(cfg.model, tok, use_flex_attention=dataloader_config.intra_doc_causal_mask)
 
     # Load datamodule
-    dataloader_config = DataloaderConfig(**conf_to_dict(cfg.data))
     datamodule = DataModule(
         train_data_path=cfg.train_data_path,
         val_data_path=cfg.val_data_path,
-        max_position_embeddings=model.config.max_position_embeddings,
+        max_position_embeddings=model_config["max_position_embeddings"],
         eod_token_id=tok.eos_token_id,
         dataloader_config=dataloader_config,
     )
-
-    # Maybe compile
-    if cfg.torch_compile:
-        model = torch.compile(model)
-
-    # Load module
-    optim_config = OptimCofig(**conf_to_dict(cfg.optim))  # type: ignore
-    module = LanguageModel(model, config, optim_config)  # type: ignore
 
     # Check if we are in a SLURM environment
     env = SLURMEnvironment()
@@ -61,8 +50,14 @@ def main(cfg: DictConfig) -> None:
         plugins.append(env)
 
     # Load trainer
+    seed_everything(cfg.seed)
     loggers, callbacks = instantiate_from_conf([cfg.get(i) for i in ("loggers", "callbacks")])
     trainer = Trainer(**conf_to_dict(cfg.trainer), logger=loggers, callbacks=callbacks, plugins=plugins)
+
+    # Instantiate the model on device directly
+    optim_config = OptimCofig(**conf_to_dict(cfg.optim))  # type: ignore
+    with trainer.init_module():
+        module = LanguageModel(model_config, optim_config, use_torch_compile=cfg.torch_compile)
 
     # Train
     ckpt_path = Path(cfg.resume_from_checkpoint) if cfg.resume_from_checkpoint else None
@@ -74,7 +69,6 @@ def main(cfg: DictConfig) -> None:
         ckpt_path = None
 
     with track_time("Training"):
-        seed_everything(cfg.seed)
         torch.set_float32_matmul_precision("high")
         trainer.fit(model=module, datamodule=datamodule, ckpt_path=ckpt_path)
 
