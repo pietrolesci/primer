@@ -57,7 +57,7 @@ torch_compile: true
 data:
   batch_size: 32
   eval_batch_size: 64
-  shuffle: true
+  shuffle_seed: null  # no shuffling
   drop_last: false
   num_workers: 8
   pin_memory: true
