@@ -72,6 +72,9 @@ def main(cfg: DictConfig) -> None:
         torch.set_float32_matmul_precision("high")
         trainer.fit(model=module, datamodule=datamodule, ckpt_path=ckpt_path)
 
+    with track_time("Validating"):
+        trainer.validate(model=module, datamodule=datamodule)
+
     for log in trainer.loggers:
         if isinstance(log, TensorBoardLogger):
             log.save_to_parquet("tb_logs.parquet")
