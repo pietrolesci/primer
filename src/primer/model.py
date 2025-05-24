@@ -14,8 +14,9 @@ from transformers import PreTrainedModel, PreTrainedTokenizerFast  # type: ignor
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import LlamaForCausalLM
 from transformers.optimization import TYPE_TO_SCHEDULER_FUNCTION, get_scheduler
-
+from lightning.pytorch import Callback
 from primer.utilities import DictConfig, get_logger
+from primer.callbacks.gradient_accumulation import GradientAccumulationScheduler
 
 logger = get_logger("model")
 
@@ -79,12 +80,14 @@ class OptimCofig(DictConfig):
     lr: float
     weight_decay: float = 0.0
     optim_kwargs: dict = field(default_factory=dict)
-    keller_kwargs: dict = field(default_factory=dict)
 
     # Scheduler config
     scheduler_name: str | None = None
     num_warmup_steps: int | None = None
     scheduler_kwargs: dict = field(default_factory=dict)
+
+    # Gradient accumulation config
+    grad_acc_schedule: dict | None = None
 
     def __post_init__(self) -> None:
         assert self.optim_name in TYPE_TO_OPTIMIZER_CLASS
@@ -97,8 +100,8 @@ class LanguageModel(LightningModule):
         super().__init__()
         # Asking for config to be dict so that lightning saves it in the checkpoint without problems
         self.config = LlamaConfig(**config)
-        self.use_torch_compile = use_torch_compile
         self.optim_config = optim_config
+        self.use_torch_compile = use_torch_compile
         self.save_hyperparameters()
 
     def configure_model(self) -> None:
@@ -114,6 +117,10 @@ class LanguageModel(LightningModule):
             f"Memory footprint: {self.model.get_memory_footprint() / 1e6:.2f}MB\n"
             f"Num parameters: {self.model.num_parameters() / 1e6:.1f}M"
         )
+
+    def configure_callbacks(self) -> list[Callback]:
+        # These are optimisation-related callbacks, so I want to initialise them here
+        return [GradientAccumulationScheduler(scheduling=self.optim_config.grad_acc_schedule)]
 
     def on_train_start(self) -> None:
         # Log hyperparameters to TensorBoard: https://lightning.ai/docs/pytorch/latest/extensions/logging.html#logging-hyperparameters

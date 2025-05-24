@@ -8,7 +8,6 @@ defaults:
       - lr_monitor
       - grad_norm
       - speed_monitor
-      - grad_accum
       - model_checkpoint
   - model: llama
   - override /hydra/job_logging: colorlog
@@ -69,6 +68,7 @@ data:
 optim:
   optim_name: adamw
   lr: 6e-4
+  grad_acc_schedule: { 0: 2 }
   weight_decay: 0.01
   optim_kwargs:
     fused: true
