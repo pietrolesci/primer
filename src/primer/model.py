@@ -10,20 +10,17 @@ from tbparse import SummaryReader
 from torch import Tensor
 from torch.nn.functional import cross_entropy
 from torch.optim.adamw import AdamW
-from transformers import (
-    AutoModelForCausalLM,
-    PreTrainedModel,  # type: ignore
-    PreTrainedTokenizerFast,  # type: ignore
-)
+from transformers import PreTrainedModel, PreTrainedTokenizerFast  # type: ignore
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import LlamaForCausalLM
 from transformers.optimization import TYPE_TO_SCHEDULER_FUNCTION, get_scheduler
 
 from primer.utilities import DictConfig, get_logger
 
-TYPE_TO_OPTIMIZER_CLASS = {"adamw": AdamW}
-
 logger = get_logger("model")
+
+
+TYPE_TO_OPTIMIZER_CLASS = {"adamw": AdamW}
 
 
 def get_model_config(model_config: dict, tok: PreTrainedTokenizerFast, use_flex_attention: bool = False) -> dict:
@@ -62,7 +59,8 @@ def load_hf_from_pl(checkpoint_path: str | Path) -> PreTrainedModel:
         if k.startswith("model.")
     }
     config = checkpoint["hyper_parameters"].get("config")
-    model = AutoModelForCausalLM.from_config(config)
+    config = LlamaConfig(**config) if isinstance(config, dict) else config  # TODO: check this
+    model = LlamaForCausalLM(config)
     model.load_state_dict(state_dict)
 
     logger.info(f"Model {config=}")
@@ -116,6 +114,12 @@ class LanguageModel(LightningModule):
             f"Memory footprint: {self.model.get_memory_footprint() / 1e6:.2f}MB\n"
             f"Num parameters: {self.model.num_parameters() / 1e6:.1f}M"
         )
+
+    def on_train_start(self) -> None:
+        # Log hyperparameters to TensorBoard: https://lightning.ai/docs/pytorch/latest/extensions/logging.html#logging-hyperparameters
+        if isinstance(self.logger, TensorBoardLogger):
+            loss_metrics = {f"{stage}/loss": 0.0 for stage in (RunningStage.TRAIN, RunningStage.VALIDATION)}
+            self.logger.log_hyperparams(self.hparams, loss_metrics)  # type: ignore
 
     def forward(self, input_ids: Tensor, **kwargs) -> Tensor:
         return self.model.forward(input_ids=input_ids, **kwargs).logits  # type: ignore
@@ -192,6 +196,10 @@ class LanguageModel(LightningModule):
 
 class TensorBoardLogger(_TensorBoardLogger):
     LOGGER_NAME: str = "tensorboard"
+
+    def __init__(self, save_dir: str | Path, name: str | None = "tb_logs", version: int | str | None = None) -> None:
+        # Set this to default_hp_metric=False since we log_hparams manually `on_train_start`
+        super().__init__(save_dir=save_dir, name=name, version=version, default_hp_metric=False)
 
     @property
     def logger_name(self) -> str:
