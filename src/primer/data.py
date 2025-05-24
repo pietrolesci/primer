@@ -283,7 +283,7 @@ class DataModule(LightningDataModule):
         self.eod_token_id = eod_token_id
         self.dataloader_config = dataloader_config
         self.num_tokens_col = num_tokens_col
-        self.save_hyperparameters()
+        self.save_hyperparameters(ignore=["num_tokens_col"])
 
     def setup(self, stage: Literal["fit", "validate", "test", "predict"] | None = None) -> None:
         if self.train_data_path:
