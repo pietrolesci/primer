@@ -73,7 +73,8 @@ def main(cfg: DictConfig) -> None:
         trainer.fit(model=module, datamodule=datamodule, ckpt_path=ckpt_path)
 
     with track_time("Validating"):
-        trainer.validate(model=module, datamodule=datamodule)
+        # use the last checkpoint for validation
+        trainer.validate(model=module, datamodule=datamodule, ckpt_path="last")
 
     for log in trainer.loggers:
         if isinstance(log, TensorBoardLogger):
