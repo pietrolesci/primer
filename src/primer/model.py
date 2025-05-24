@@ -4,7 +4,7 @@ from enum import StrEnum
 from pathlib import Path
 
 import torch
-from lightning.pytorch import LightningModule
+from lightning.pytorch import Callback, LightningModule
 from lightning.pytorch.loggers.tensorboard import TensorBoardLogger as _TensorBoardLogger
 from tbparse import SummaryReader
 from torch import Tensor
@@ -14,9 +14,9 @@ from transformers import PreTrainedModel, PreTrainedTokenizerFast  # type: ignor
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import LlamaForCausalLM
 from transformers.optimization import TYPE_TO_SCHEDULER_FUNCTION, get_scheduler
-from lightning.pytorch import Callback
-from primer.utilities import DictConfig, get_logger
+
 from primer.callbacks.gradient_accumulation import GradientAccumulationScheduler
+from primer.utilities import DictConfig, get_logger
 
 logger = get_logger("model")
 
