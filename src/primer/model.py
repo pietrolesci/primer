@@ -125,8 +125,7 @@ class LanguageModel(LightningModule):
     def on_train_start(self) -> None:
         # Log hyperparameters to TensorBoard: https://lightning.ai/docs/pytorch/latest/extensions/logging.html#logging-hyperparameters
         if isinstance(self.logger, TensorBoardLogger):
-            loss_metrics = {f"{stage}/loss": 0.0 for stage in (RunningStage.TRAIN, RunningStage.VALIDATION)}
-            self.logger.log_hyperparams(self.hparams, loss_metrics)  # type: ignore
+            self.logger.log_hyperparams(self.hparams, {f"hp_metric/{RunningStage.VALIDATION}_loss": 0.0})  # type: ignore
 
     def forward(self, input_ids: Tensor, **kwargs) -> Tensor:
         return self.model.forward(input_ids=input_ids, **kwargs).logits  # type: ignore
@@ -134,7 +133,6 @@ class LanguageModel(LightningModule):
     def step(self, batch: dict[str, Tensor], stage: RunningStage) -> Tensor | None:
         input_ids = batch["input_ids"][:, :-1]
         att_mask = batch["att_mask"][:, :-1] if "att_mask" in batch else None
-
         labels = batch["input_ids"][:, 1:].clone()
 
         logits = self.forward(input_ids=input_ids, attention_mask=att_mask)
@@ -153,6 +151,19 @@ class LanguageModel(LightningModule):
 
         if stage == RunningStage.TRAIN:
             return loss
+
+        # Log validation loss to TensorBoard as hp_metric
+        if stage == RunningStage.VALIDATION and isinstance(self.logger, TensorBoardLogger):
+            self.log(
+                f"hp_metric/{RunningStage.VALIDATION}_loss",
+                loss.detach(),
+                on_step=False,
+                on_epoch=True,
+                prog_bar=False,
+                logger=True,
+                batch_size=labels.shape[0],
+                sync_dist=True,
+            )
 
     def training_step(self, batch: Tensor, batch_idx: int) -> Tensor:
         return self.step(batch, RunningStage.TRAIN)  # type: ignore
