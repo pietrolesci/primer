@@ -1,5 +1,5 @@
 tensorboard:
-  _target_: primer.trainer.TensorBoardLogger
+  _target_: primer.model.TensorBoardLogger
   save_dir: ./
   name: ''
   version: null  # ./

@@ -3,6 +3,9 @@ from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.callbacks.callback import Callback
 from lightning.pytorch.utilities.model_helpers import is_overridden
 from torch import Tensor
+from torch.optim import Optimizer
+from torchmetrics import MetricCollection
+from torchmetrics.aggregation import SumMetric
 
 from primer.utilities import get_logger
 
@@ -29,7 +32,11 @@ class GradientAccumulationScheduler(Callback):
         self.scheduling = scheduling
         self.steps = sorted(scheduling.keys())
 
-        self.counter = {"num_instances": 0, "num_batches": 0, "num_tokens": 0}
+        # self.counter = {"num_instances": 0, "num_batches": 0, "num_tokens": 0}
+        self.counter = MetricCollection(
+            {"num_batches": SumMetric(), "num_instances": SumMetric(), "num_million_tokens": SumMetric()},
+            prefix=f"{self.PREFIX}/",
+        )
 
     def going_to_accumulate_grad_batches(self) -> bool:
         return any(v > 1 for v in self.scheduling.values())
@@ -76,10 +83,15 @@ class GradientAccumulationScheduler(Callback):
                 " callback. Either remove `accumulate_grad_batches` from the Trainer or remove the callback."
             )
 
-    def on_train_batch_start(self, trainer: Trainer, pl_module: LightningModule, batch: Tensor, batch_idx: int) -> None:
-        self.counter["num_batches"] += 1
-        self.counter["num_instances"] += batch.shape[0]
-        self.counter["num_tokens"] += batch.numel()
+    def on_train_batch_start(
+        self, trainer: Trainer, pl_module: LightningModule, batch: Tensor | dict[str, Tensor], batch_idx: int
+    ) -> None:
+        batch = batch["input_ids"] if isinstance(batch, dict) else batch
+
+        # Update metrics using the MetricCollection
+        self.counter["num_batches"].update(1)
+        self.counter["num_instances"].update(batch.shape[0])
+        self.counter["num_million_tokens"].update(batch.numel() / 1e6)
 
         # Maybe change the number of accumulated batches
         prev_accumulate_grad_batches = trainer.accumulate_grad_batches
@@ -92,14 +104,17 @@ class GradientAccumulationScheduler(Callback):
                 f"Effective batch size = {eff_bs}."
             )
 
-    def on_before_optimizer_step(self, trainer: Trainer, *args, **kwargs) -> None:
-        # Log
-        for pl_logger in trainer.loggers:
-            pl_logger.log_metrics(
-                {f"{self.PREFIX}/{k}_per_step": v for k, v in self.counter.items()}, step=trainer.global_step
-            )
+    def on_before_optimizer_step(self, trainer: Trainer, pl_module: LightningModule, optimizer: Optimizer) -> None:
+        counts = self.counter.compute()
+        counts = {f"{k}_per_step": v for k, v in counts.items()}
+        pl_module.log_dict(
+            counts,
+            on_step=True,
+            on_epoch=False,
+            prog_bar=False,
+            logger=True,
+            sync_dist=False,  # Synchronize across distributed processes is done by torchmetrics internally
+        )
 
-        # Reset counter when optimization step is done
-        self.counter["num_batches"] = 0
-        self.counter["num_instances"] = 0
-        self.counter["num_tokens"] = 0
+        # Reset metrics after logging
+        self.counter.reset()

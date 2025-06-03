@@ -8,8 +8,8 @@ defaults:
       - lr_monitor
       - grad_norm
       - speed_monitor
-      - grad_accum
       - model_checkpoint
+  - model: llama
   - override /hydra/job_logging: colorlog
   - override /hydra/hydra_logging: colorlog
   - _self_
@@ -47,7 +47,6 @@ train_data_path: "???"
 val_data_path: "???"
 
 # Model training
-model: "???"
 resume_from_checkpoint: null
 save_initial_checkpoint: true
 
@@ -57,17 +56,19 @@ torch_compile: true
 data:
   batch_size: 32
   eval_batch_size: 64
-  shuffle: true
-  drop_last: false
+  shuffle_seed: null  # no shuffling
+  drop_last: true
   num_workers: 8
   pin_memory: true
   persistent_workers: false
   prefetch_factor: 2
   multiprocessing_context: null
+  intra_doc_causal_mask: false
 
 optim:
   optim_name: adamw
   lr: 6e-4
+  grad_acc_schedule: { 0: 2 }
   weight_decay: 0.01
   optim_kwargs:
     fused: true
@@ -76,7 +77,6 @@ optim:
   scheduler_name: warmup_stable_decay # cosine_with_min_lr
   num_warmup_steps: 2000
   scheduler_kwargs:
-    num_stable_steps: 44000
     num_decay_steps: 4000
     min_lr_ratio: 0.01
 
@@ -92,5 +92,5 @@ trainer:
   gradient_clip_algorithm: norm
   val_check_interval: 2000
   max_steps: 50_000
-  limit_val_batches: 500
-  # limit_train_batches: 10
+  limit_val_batches: null
+  limit_train_batches: null

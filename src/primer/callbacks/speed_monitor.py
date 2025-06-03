@@ -4,7 +4,7 @@ from lightning import Trainer
 from lightning.pytorch import Callback, LightningModule
 from lightning.pytorch.utilities import rank_zero_only
 
-from primer.trainer import RunningStage
+from primer.model import RunningStage
 
 
 class SpeedMonitor(Callback):

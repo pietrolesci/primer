@@ -66,7 +66,9 @@ class DictConfig:
         return len(self.__dict__)
 
 
-def get_logger(name: str, level: Literal["error", "warning", "info", "debug"] = "info") -> logging.Logger:
+def get_logger(
+    name: str, level: Literal["error", "warning", "info", "debug"] = "info", rich: bool = False
+) -> logging.Logger:
     # Convert the level string to the corresponding logging level
     log_level = getattr(logging, level.upper(), logging.INFO)
 
@@ -81,6 +83,9 @@ def get_logger(name: str, level: Literal["error", "warning", "info", "debug"] = 
     )
     logger.addHandler(handler)
     logger.propagate = False
+
+    if rich:
+        logger = add_rich_handler(logger)
     return logger
 
 
@@ -100,7 +105,6 @@ def add_rich_handler(logger: logging.Logger) -> logging.Logger:
         logger.addHandler(rich_handler)
         logger.setLevel(logging.DEBUG)  # Set the desired log level
         logger.propagate = False  # Prevent log propagation to parent loggers
-        logger.info("RichHandler successfully added to the logger.")
     return logger
 
 
