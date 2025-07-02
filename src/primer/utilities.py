@@ -12,6 +12,7 @@ from typing import Any, Literal
 import colorlog
 import polars as pl
 import srsly
+from huggingface_hub import whoami
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 from rich import print
@@ -30,6 +31,8 @@ def set_hf_paths() -> None:
     os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
 
     # Print the environment variables
+    # print(f"You are logged in as: {yaml.dump(whoami())}")
+    print(f"You are logged in as: {whoami()['name']}")
     print("HF_HOME:", os.environ["HF_HOME"])
     print("HF_DATASETS_CACHE:", os.environ["HF_DATASETS_CACHE"])
     print("TORCH_HOME:", os.environ["TORCH_HOME"])
