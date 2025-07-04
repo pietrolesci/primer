@@ -37,7 +37,7 @@ def main(cfg: DictConfig) -> None:
     datamodule = DataModule(
         train_data_path=cfg.train_data_path,
         val_data_path=cfg.val_data_path,
-        max_position_embeddings=model_config["max_position_embeddings"],
+        seq_len=model_config["max_position_embeddings"],
         eod_token_id=tok.eos_token_id,
         dataloader_config=dataloader_config,
     )
