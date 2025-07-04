@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 import numpy as np
-import polars as pl
+import pyarrow.compute as pc
 import torch
 from datasets import Dataset, load_from_disk
 from lightning.pytorch import LightningDataModule
@@ -38,7 +38,6 @@ class PackedTokenDataset(TorchDataset):
         eod_token_id: int = 0,
         shuffle_seed: int | None = None,
         intra_doc_causal_mask: bool = False,
-        num_tokens_col: str | None = None,
     ) -> None:
         """
         Args:
@@ -48,8 +47,6 @@ class PackedTokenDataset(TorchDataset):
             eod_token_id (int): End-of-document token (default: 0).
             shuffle_seed (int | None): Seed for shuffling documents and sequences.
                 If None, no shuffling is performed.
-            num_tokens_col (str | None): Column name for the number of tokens in the dataset.
-                If None, it will be computed.
             intra_doc_causal_mask (bool): Whether to apply a causal mask within individual documents.
                 If True, tokens within the same document will only attend to previous tokens in the sequence.
         """
@@ -58,14 +55,18 @@ class PackedTokenDataset(TorchDataset):
         self.eod_token_id = eod_token_id
         self.shuffle_seed = shuffle_seed
         self.intra_doc_causal_mask = intra_doc_causal_mask
-        self.num_tokens_col = num_tokens_col
         self.setup()
 
     def setup(self) -> None:
         # Read datasets
         assert self.data_path.exists(), f"Data path {self.data_path} does not exist."
         self.dataset: Dataset = load_from_disk(str(self.data_path))  # type: ignore
-        assert "input_ids" in self.dataset.column_names, "Dataset must contain 'input_ids' column."
+        assert "input_ids" in self.dataset.column_names
+        # if "input_ids" not in self.dataset.column_names:
+        #     if "token_ids" in self.dataset.column_names:
+        #         self.dataset = self.dataset.rename_column("token_ids", "input_ids")
+        #     else:
+        #         raise ValueError("Dataset must contain 'input_ids' or 'token_ids' column.")
 
         # Creating doc_idx to control document shuffling
         doc_idx_path = self._format_metadata_path("docs")
@@ -108,13 +109,15 @@ class PackedTokenDataset(TorchDataset):
         return self.data_path / f"{filename}_{suffix}"
 
     def _save_arange_memmap(self, size: int, path: str | Path) -> None:
-        memmap = np.memmap(path, dtype=self._idx_dtype, mode="w+", shape=(size,))
-        memmap[:] = np.arange(size, dtype=self._idx_dtype)
+        # Moved to doing this in RAM instead of directly writing to memmap,
+        arr = np.arange(size, dtype=self._idx_dtype)
 
         if self.shuffle_seed is not None:
             rng = np.random.default_rng(self.shuffle_seed)
-            rng.shuffle(memmap)  # Shuffle directly in the memory-mapped file
+            rng.shuffle(arr)  # Shuffle directly in the memory-mapped file
 
+        memmap = np.memmap(path, dtype=self._idx_dtype, mode="w+", shape=(size,))
+        memmap[:] = arr
         memmap.flush()
         assert len(memmap) == size, f"Expected {size} elements, but got {len(memmap)}."
 
@@ -122,15 +125,9 @@ class PackedTokenDataset(TorchDataset):
         """Compute document boundary, i.e., offsets.
 
         If we are shuffling documents, we first shuffle them and then "concatenate" (in the cumsum) and
-        compute the offsets. NOTE: I am using polars to extract info from datasets as it is way faster.
+        compute the offsets.
         """
-        if self.num_tokens_col and self.num_tokens_col in self.dataset.column_names:
-            logger.info(f"Using precomputed number of tokens from column {self.num_tokens_col}.")
-            doc_lens = pl.from_arrow(self.dataset.data.table[self.num_tokens_col]).to_numpy()  # type: ignore
-        else:
-            if self.num_tokens_col:
-                logger.warning(f"Column {self.num_tokens_col=} passed but not found. Recomputing token counts.")
-            doc_lens = pl.from_arrow(self.dataset.data.table["input_ids"]).list.len().to_numpy()  # type: ignore
+        doc_lens = pc.list_value_length(self.dataset.data.table["input_ids"]).to_numpy()  # type: ignore
 
         assert doc_lens.ndim == 1, f"Expected 1D array for document lengths, but got {doc_lens.ndim}D."
         doc_lens = doc_lens + 1  # Add 1 for EOD token
@@ -271,29 +268,26 @@ class DataModule(LightningDataModule):
         self,
         train_data_path: str | Path | None,
         val_data_path: str | Path | None,
-        max_position_embeddings: int,
+        seq_len: int,
         eod_token_id: int,
         dataloader_config: DataloaderConfig,
-        num_tokens_col: str | None = None,
     ) -> None:
         super().__init__()
         self.train_data_path = Path(train_data_path) if train_data_path else train_data_path
         self.val_data_path = Path(val_data_path) if val_data_path else val_data_path
-        self.max_position_embeddings = max_position_embeddings
+        self.seq_len = seq_len
         self.eod_token_id = eod_token_id
         self.dataloader_config = dataloader_config
-        self.num_tokens_col = num_tokens_col
-        self.save_hyperparameters(ignore=["num_tokens_col"])
+        self.save_hyperparameters()
 
     def setup(self, stage: Literal["fit", "validate", "test", "predict"] | None = None) -> None:
         if self.train_data_path:
             self.train_ds = PackedTokenDataset(
                 data_path=str(self.train_data_path),
-                seq_len=self.max_position_embeddings,
+                seq_len=self.seq_len,
                 eod_token_id=self.eod_token_id,
                 shuffle_seed=self.dataloader_config.shuffle_seed,
                 intra_doc_causal_mask=self.dataloader_config.intra_doc_causal_mask,
-                num_tokens_col=self.num_tokens_col,
             )
             logger.info(f"Train dataset loaded: {len(self.train_ds)=}")
             logger.info(f"{self.train_ds=}")
@@ -301,10 +295,9 @@ class DataModule(LightningDataModule):
         if self.val_data_path:
             self.val_ds = PackedTokenDataset(
                 data_path=str(self.val_data_path),
-                seq_len=self.max_position_embeddings,
+                seq_len=self.seq_len,
                 eod_token_id=self.eod_token_id,
                 intra_doc_causal_mask=self.dataloader_config.intra_doc_causal_mask,
-                num_tokens_col=self.num_tokens_col,
             )
             logger.info(f"Validation dataset loaded: {len(self.val_ds)=}")
             logger.info(f"{self.val_ds=}")
