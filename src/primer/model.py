@@ -13,6 +13,8 @@ from torch.optim.adamw import AdamW
 from transformers import PreTrainedModel, PreTrainedTokenizerFast  # type: ignore
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import LlamaForCausalLM
+from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
+from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 from transformers.optimization import TYPE_TO_SCHEDULER_FUNCTION, get_scheduler
 
 from primer.callbacks.gradient_accumulation import GradientAccumulationScheduler
@@ -60,10 +62,15 @@ def load_hf_from_pl(checkpoint_path: str | Path) -> PreTrainedModel:
         if k.startswith("model.")
     }
     config = checkpoint["hyper_parameters"].get("config")
-    config = LlamaConfig(**config) if isinstance(config, dict) else config  # TODO: check this
-    model = LlamaForCausalLM(config)
-    model.load_state_dict(state_dict)
+    if isinstance(config, dict):
+        config = Qwen3Config(**config) if config["model_type"] == "qwen3" else LlamaConfig(**config)
+    else:
+        # If config is not a dict, it is already a config object
+        assert isinstance(config, Qwen3Config | LlamaConfig), "Config should be either Qwen3Config or LlamaConfig"
 
+    model = Qwen3ForCausalLM(config) if config.model_type == "qwen3" else LlamaForCausalLM(config)
+
+    model.load_state_dict(state_dict)
     logger.info(f"Model {config=}")
     return model
 
@@ -99,13 +106,13 @@ class LanguageModel(LightningModule):
     def __init__(self, config: dict, optim_config: OptimCofig, use_torch_compile: bool = False) -> None:
         super().__init__()
         # Asking for config to be dict so that lightning saves it in the checkpoint without problems
-        self.config = LlamaConfig(**config)
+        self.config = Qwen3Config(**config) if config["model_type"] == "qwen3" else LlamaConfig(**config)
         self.optim_config = optim_config
         self.use_torch_compile = use_torch_compile
         self.save_hyperparameters()
 
     def configure_model(self) -> None:
-        self.model = LlamaForCausalLM(self.config)
+        self.model = LlamaForCausalLM(self.config) if self.config.model_type == "llama" else Qwen3ForCausalLM(self.config)
 
         if self.use_torch_compile or self.config._attn_implementation == "flex_attention":
             logger.info("Using torch.compile. This is triggered even if you set it to False but use flex_attention.")
