@@ -16,6 +16,49 @@ from primer.utilities import DictConfig, get_logger
 logger = get_logger("data")
 
 
+class OffsetLocator:
+    def __init__(self, offsets: np.ndarray, block_size: int = 2048) -> None:
+        assert offsets.ndim == 1, f"Expected offsets to be a 1D array, but got {offsets.ndim}D array."
+        self.offsets = offsets
+        self.block_size = block_size
+
+        # Trim or pad offsets to fit blocks
+        self.total_len = len(offsets)
+        pad_len = (block_size - self.total_len % block_size) % block_size
+        if pad_len > 0:
+            # Pad with a large number to avoid false positives
+            offsets = np.concatenate([offsets, np.full(pad_len, offsets[-1] + 1)])
+
+        self.offsets_2d = offsets.reshape(-1, block_size)
+        self.block_starts = self.offsets_2d[:, 0]
+        assert np.all(self.block_starts[:-1] <= self.block_starts[1:]), "offsets must be sorted"
+
+    def locate(self, pos: int) -> int:
+        """Return the index i such that offsets[i] <= pos < offsets[i+1]."""
+        # Level 1: Find block
+        block_idx = np.searchsorted(self.block_starts, pos, side="right") - 1
+        block_idx = np.clip(block_idx, 0, self.offsets_2d.shape[0] - 1)
+
+        # Level 2: Search within block
+        row = self.offsets_2d[block_idx]
+        within_idx = np.searchsorted(row, pos, side="right") - 1
+        final_idx = block_idx * self.block_size + within_idx
+
+        # Clip to avoid going past original array
+        return min(final_idx, self.total_len - 1)
+
+    @property
+    def total_tokens(self) -> int:
+        """Return the total number of tokens in the offsets."""
+        return int(self.offsets[-1])
+
+    def get(self, idx: int) -> int:
+        """Get the offset at the given index."""
+        if idx < 0 or idx >= len(self.offsets):
+            raise IndexError(f"Index {idx} is out of bounds for offsets with length {len(self.offsets)}.")
+        return int(self.offsets[idx])
+
+
 class PackedTokenDataset(TorchDataset):
     """A map-style dataset that packs tokenized documents into fixed-length sequences.
 
@@ -62,11 +105,6 @@ class PackedTokenDataset(TorchDataset):
         assert self.data_path.exists(), f"Data path {self.data_path} does not exist."
         self.dataset: Dataset = load_from_disk(str(self.data_path))  # type: ignore
         assert "input_ids" in self.dataset.column_names
-        # if "input_ids" not in self.dataset.column_names:
-        #     if "token_ids" in self.dataset.column_names:
-        #         self.dataset = self.dataset.rename_column("token_ids", "input_ids")
-        #     else:
-        #         raise ValueError("Dataset must contain 'input_ids' or 'token_ids' column.")
 
         # Creating doc_idx to control document shuffling
         doc_idx_path = self._format_metadata_path("docs")
@@ -84,10 +122,11 @@ class PackedTokenDataset(TorchDataset):
             logger.info(f"Computing offsets and saving to `{offsets_path}`")
             self._save_offsets_memmap(offsets_path)
         logger.info(f"Loaded offsets from `{offsets_path}`")
-        self.offsets = self._load_memmap(offsets_path, is_offsets=True)
+        offsets = self._load_memmap(offsets_path, is_offsets=True)
+        self.offsets = OffsetLocator(offsets, block_size=2048)
 
         # Calculate total number of sequences
-        self.total_tokens = int(self.offsets[-1])
+        self.total_tokens = self.offsets.total_tokens
         self.num_sequences = self.total_tokens // self.seq_len  # Drops remainder of tokens that do not fill seq_len
 
         # Computing seq_idx to control sequence shuffling
@@ -146,15 +185,13 @@ class PackedTokenDataset(TorchDataset):
     def get_sequence(self, start_pos: int, end_pos: int) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Retrieve a sequence with minimal overhead and fast memory operations."""
         current_tokens = torch.empty(end_pos - start_pos, dtype=torch.long)
+        att_mask_doc_ids = torch.empty(self.seq_len, dtype=torch.long) if self.intra_doc_causal_mask else None
         pos = start_pos
         i = 0
-
-        att_mask_doc_ids = torch.empty(self.seq_len, dtype=torch.long) if self.intra_doc_causal_mask else None
-
         while pos < end_pos:
             # Find the relevant document for the current position in the shuffled order using binary search
             # Again, since we are shuffling, the document index is with respect to the shuffled documents
-            shuffled_doc_idx = int(np.searchsorted(self.offsets, pos, side="right") - 1)
+            shuffled_doc_idx = self.offsets.locate(pos)
 
             # Since self.dataset is NOT shuffled, we need the document position in the original non-shuffled order
             doc_idx = int(self.doc_idx[shuffled_doc_idx])
@@ -164,7 +201,7 @@ class PackedTokenDataset(TorchDataset):
 
             # Get relative position of pos within the document
             # Remember pos is the absolute position within the entire "stream" of tokens
-            doc_start = int(pos - self.offsets[shuffled_doc_idx])
+            doc_start = int(pos - self.offsets.get(shuffled_doc_idx))
 
             # Get the number of tokens to copy from the document
             tokens_to_copy = min(len(input_ids) - doc_start, end_pos - pos)

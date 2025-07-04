@@ -112,7 +112,9 @@ class LanguageModel(LightningModule):
         self.save_hyperparameters()
 
     def configure_model(self) -> None:
-        self.model = LlamaForCausalLM(self.config) if self.config.model_type == "llama" else Qwen3ForCausalLM(self.config)
+        self.model = (
+            LlamaForCausalLM(self.config) if self.config.model_type == "llama" else Qwen3ForCausalLM(self.config)
+        )
 
         if self.use_torch_compile or self.config._attn_implementation == "flex_attention":
             logger.info("Using torch.compile. This is triggered even if you set it to False but use flex_attention.")
