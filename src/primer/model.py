@@ -2,13 +2,14 @@ import importlib.util
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from typing import Literal
 
 import torch
 from lightning.pytorch import Callback, LightningModule
 from lightning.pytorch.loggers.tensorboard import TensorBoardLogger as _TensorBoardLogger
 from tbparse import SummaryReader
 from torch import Tensor
-from torch.nn.functional import cross_entropy
+from torch.nn.functional import cross_entropy, nll_loss
 from torch.optim.adamw import AdamW
 from transformers import PreTrainedModel, PreTrainedTokenizerFast  # type: ignore
 from transformers.models.llama.configuration_llama import LlamaConfig
@@ -21,7 +22,6 @@ from primer.callbacks.gradient_accumulation import GradientAccumulationScheduler
 from primer.utilities import DictConfig, get_logger
 
 logger = get_logger("model")
-
 
 TYPE_TO_OPTIMIZER_CLASS = {"adamw": AdamW}
 
@@ -95,11 +95,71 @@ class OptimCofig(DictConfig):
 
     # Gradient accumulation config
     grad_acc_schedule: dict | None = None
+    zloss_factor: float | None = None  # lambda for zloss, if used
 
     def __post_init__(self) -> None:
         assert self.optim_name in TYPE_TO_OPTIMIZER_CLASS
         if self.scheduler_name is not None:
             assert self.scheduler_name in TYPE_TO_SCHEDULER_FUNCTION
+
+
+class CrossEntropyWithZLoss(torch.nn.Module):
+    """ZLoss is a modified CrossEntropyLoss.
+
+    When z_loss=0: they are equivalent. z_loss encourages the logits:
+    - to not drift too far from zero (which can cause unacceptable roundoff errors in bfloat16)
+    - to be normalized log-probabilities
+    Based on t5x and mesh_tensorflow implementations:
+    https://github.com/google-research/t5x/blob/77d2624e65799e3bea15586eb1d3fe7c63477a92/t5x/models.py#L738
+    https://github.com/google-research/t5x/blob/0728d8429041d6c6e75077334e76eb2370c6057b/t5x/losses.py#L50
+    https://github.com/tensorflow/mesh/blob/fa19d69eafc9a482aff0b59ddd96b025c0cb207d/mesh_tensorflow/layers.py#L666
+    and https://github.com/Birch-san/z-loss-pytorch/blob/main/z_loss.py
+    """
+
+    def __init__(
+        self,
+        ignore_index: int = -100,
+        reduction: Literal["mean", "sum", "none"] = "mean",
+        zloss_factor: float | None = None,
+    ) -> None:
+        super().__init__()
+        self.ignore_index = ignore_index
+
+        assert reduction in {"mean", "sum", "none"}, f"Invalid reduction: {reduction}"
+        self.reduction = reduction
+
+        assert zloss_factor is None or (isinstance(zloss_factor, float) and zloss_factor >= 0), (
+            f"Invalid zloss_factor: {zloss_factor}"
+        )
+        self.zloss_factor = zloss_factor
+
+    def forward(self, logits: torch.FloatTensor, labels: torch.LongTensor) -> Tensor:
+        """To keep the interface similar to the original cross_entropy, we expect flattened logits and labels.
+
+        logits: (B, V), labels: (B,)
+        """
+        # log_z = logits.logsumexp(dim=-1)  # (B, T, V) -> (B, T)
+        # log_softmax = logits - log_z.unsqueeze(-1)  # (B, T, V) - (B, T, 1) -> (B, T, V)
+        # loss = nll_loss(log_softmax.flatten(end_dim=-2), labels.flatten(), ignore_index=self.ignore_index, reduction='none')  # (B, T, V) -> (B, T)
+        # loss = loss.unflatten(0, labels.shape)  # (B, T)
+        log_z = logits.logsumexp(dim=-1)  # (B,)
+        log_softmax = logits - log_z.unsqueeze(-1)  # (B, V)
+        loss = nll_loss(log_softmax, labels, ignore_index=self.ignore_index, reduction="none")  # (B,)
+
+        if self.zloss_factor is not None:
+            log_z.masked_fill_(labels == self.ignore_index, 0)
+            loss += self.zloss_factor * log_z.pow(2)
+
+        if self.reduction == "none":
+            return loss
+
+        loss = loss.sum()
+        if self.reduction == "sum":
+            return loss
+
+        nonignored_token_count = labels.numel() - (labels == self.ignore_index).sum()
+        loss /= nonignored_token_count
+        return loss
 
 
 class LanguageModel(LightningModule):
@@ -110,6 +170,12 @@ class LanguageModel(LightningModule):
         self.optim_config = optim_config
         self.use_torch_compile = use_torch_compile
         self.save_hyperparameters()
+
+        self.loss_fn = (
+            CrossEntropyWithZLoss(zloss_factor=self.optim_config.zloss_factor)
+            if self.optim_config.zloss_factor is not None
+            else cross_entropy
+        )
 
     def configure_model(self) -> None:
         self.model = (
@@ -141,23 +207,36 @@ class LanguageModel(LightningModule):
         return self.model.forward(input_ids=input_ids, **kwargs).logits  # type: ignore
 
     def step(self, batch: dict[str, Tensor], stage: RunningStage) -> Tensor | None:
-        input_ids = batch["input_ids"][:, :-1]
-        att_mask = batch["att_mask"][:, :-1] if "att_mask" in batch else None
-        labels = batch["input_ids"][:, 1:].clone()
-
+        input_ids = batch["input_ids"][..., :-1].contiguous()
+        att_mask = batch["att_mask"][..., :-1].contiguous() if "att_mask" in batch else None
+        labels = batch["input_ids"][..., 1:].contiguous()
         logits = self.forward(input_ids=input_ids, attention_mask=att_mask)
+        logits = logits.float()  # Upcast to float to avoid potential precision issues
+        loss = self.loss_fn(logits.view(-1, logits.size(-1)), labels.view(-1))
 
-        loss = cross_entropy(logits.permute(0, 2, 1), labels)
+        # Above is functionally equivalent to this below
+        # out = self.model(
+        #     input_ids=batch["input_ids"],
+        #     labels=batch["input_ids"].clone(),
+        #     attention_mask=batch.get("att_mask")  # type: ignore
+        # )  # type: ignore
+        # loss = out.loss
+        logs = {"loss": loss.detach()}
 
-        self.log(
-            f"{stage}/loss",
-            loss.detach(),
+        # if self.optim_config.zloss_lambda is not None:
+        #     zloss = torch.logsumexp(logits, dim=-1).pow(2).mean()
+        #     loss = loss + (self.optim_config.zloss_lambda * zloss)
+        #     logs["zloss"] = zloss.detach()
+
+        self.log_dict(
+            {f"{stage}/{k}": v for k, v in logs.items()},
             on_step=stage == RunningStage.TRAIN,
             on_epoch=stage == RunningStage.VALIDATION,
             prog_bar=True,
             logger=True,
-            batch_size=labels.shape[0],
+            batch_size=batch["input_ids"].shape[0],
             sync_dist=True,
+            rank_zero_only=True,
         )
 
         if stage == RunningStage.TRAIN:
