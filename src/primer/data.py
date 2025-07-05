@@ -57,7 +57,7 @@ class OffsetLocator:
         if idx < 0 or idx >= len(self.offsets):
             raise IndexError(f"Index {idx} is out of bounds for offsets with length {len(self.offsets)}.")
         return int(self.offsets[idx])
-    
+
     def __len__(self) -> int:
         """Return the number of offsets."""
         return len(self.offsets)
@@ -89,8 +89,9 @@ class PackedTokenDataset(TorchDataset):
         """
         Args:
             data_path (str | Path): Path to a Hugging Face datasets.Dataset.
-            seq_len (int): Max context length used by the model. This value will be incremented by 1 internally
+            seq_len (int): Max context length used by the model. Internally, this value is incremented by 1
                 to account for the end-of-document (EOD) token, resulting in sequences of length `seq_len + 1`.
+                This adjustment ensures proper handling of the EOD token during training.
             eod_token_id (int): End-of-document token (default: 0).
             shuffle_seed (int | None): Seed for shuffling documents and sequences.
                 If None, no shuffling is performed.
@@ -185,6 +186,31 @@ class PackedTokenDataset(TorchDataset):
 
     def _load_memmap(self, path: str | Path, is_offsets: bool = False) -> np.memmap:
         return np.memmap(path, dtype=self._offsets_dtype if is_offsets else self._idx_dtype, mode="r")
+
+    # def get_sequence(self, start_pos: int, end_pos: int) -> tuple[torch.Tensor, torch.Tensor | None]:
+    #     """Retrieve a sequence with minimal overhead and fast memory operations."""
+    #     current_tokens = torch.empty(end_pos - start_pos, dtype=torch.long)
+    #     att_mask_doc_ids = torch.empty(self.seq_len, dtype=torch.long) if self.intra_doc_causal_mask else None
+
+    #     # Vectorized operations to retrieve tokens
+    #     positions = torch.arange(start_pos, end_pos, dtype=torch.long)
+    #     shuffled_doc_indices = torch.tensor([self.offsets.locate(pos.item()) for pos in positions], dtype=torch.long)
+    #     doc_indices = torch.tensor([int(self.doc_idx[idx]) for idx in shuffled_doc_indices], dtype=torch.long)
+
+    #     for i, doc_idx in enumerate(doc_indices.unique_consecutive()):
+    #         input_ids = torch.tensor(self.dataset[doc_idx.item()]["input_ids"], dtype=torch.long)
+    #         mask = doc_indices == doc_idx
+    #         relative_positions = positions[mask] - self.offsets.get(shuffled_doc_indices[mask][0].item())
+    #         current_tokens[mask] = input_ids[relative_positions]
+
+    #         if att_mask_doc_ids is not None:
+    #             att_mask_doc_ids[mask] = doc_idx
+
+    #     # Add EOD token if necessary
+    #     if current_tokens.size(0) < self.seq_len:
+    #         current_tokens[current_tokens.size(0)] = self.eod_token_id
+
+    #     return current_tokens, att_mask_doc_ids
 
     def get_sequence(self, start_pos: int, end_pos: int) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Retrieve a sequence with minimal overhead and fast memory operations."""
