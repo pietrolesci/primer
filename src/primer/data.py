@@ -57,6 +57,10 @@ class OffsetLocator:
         if idx < 0 or idx >= len(self.offsets):
             raise IndexError(f"Index {idx} is out of bounds for offsets with length {len(self.offsets)}.")
         return int(self.offsets[idx])
+    
+    def __len__(self) -> int:
+        """Return the number of offsets."""
+        return len(self.offsets)
 
 
 class PackedTokenDataset(TorchDataset):

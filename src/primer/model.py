@@ -36,7 +36,7 @@ def get_model_config(model_config: dict, tok: PreTrainedTokenizerFast, use_flex_
     )
 
     kwargs = {
-        "vocab_size": tok.vocab_size,
+        "vocab_size": len(tok),
         "bos_token_id": tok.bos_token_id,  # type: ignore
         "eos_token_id": tok.eos_token_id,  # type: ignore
         "pad_token_id": tok.pad_token_id,  # type: ignore
@@ -146,6 +146,7 @@ class LanguageModel(LightningModule):
         labels = batch["input_ids"][:, 1:].clone()
 
         logits = self.forward(input_ids=input_ids, attention_mask=att_mask)
+
         loss = cross_entropy(logits.permute(0, 2, 1), labels)
 
         self.log(

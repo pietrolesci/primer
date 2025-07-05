@@ -58,6 +58,7 @@ def main(cfg: DictConfig) -> None:
     optim_config = OptimCofig(**conf_to_dict(cfg.optim))  # type: ignore
     with trainer.init_module():
         module = LanguageModel(model_config, optim_config, use_torch_compile=cfg.torch_compile)
+        module.configure_model()
 
     # Train
     ckpt_path = Path(cfg.resume_from_checkpoint) if cfg.resume_from_checkpoint else None
