@@ -70,6 +70,7 @@ optim:
   optim_name: adamw
   lr: 6e-4
   grad_acc_schedule: { 0: 2 }
+  zloss_factor: 1e-3
   weight_decay: 0.01
   optim_kwargs:
     fused: true
