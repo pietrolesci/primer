@@ -22,6 +22,7 @@
     "torch>=2.6.0,<2.7.0",            # TODO: Ensure compatibility with flash-attn, can upgrade to 2.7 later
     "torchdata>=0.11.0",
     "transformers[torch]>=4.48.0",
+    "liger-kernel>=0.5.10",
   ]
   description = "A small library to pre-train language models"
   name = "primer"
