@@ -52,6 +52,7 @@ save_initial_checkpoint: true
 
 seed: 42
 torch_compile: true
+use_liger: true
 
 data:
   batch_size: 32

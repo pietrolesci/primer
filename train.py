@@ -57,7 +57,7 @@ def main(cfg: DictConfig) -> None:
     # Instantiate the model on device directly
     optim_config = OptimCofig(**conf_to_dict(cfg.optim))  # type: ignore
     with trainer.init_module():
-        module = LanguageModel(model_config, optim_config, use_torch_compile=cfg.torch_compile)
+        module = LanguageModel(model_config, optim_config, use_torch_compile=cfg.torch_compile, use_liger=cfg.use_liger)
         module.configure_model()
 
     # Train

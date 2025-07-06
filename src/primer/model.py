@@ -2,14 +2,13 @@ import importlib.util
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal
 
 import torch
+from liger_kernel.transformers import apply_liger_kernel_to_llama, apply_liger_kernel_to_qwen3
 from lightning.pytorch import Callback, LightningModule
 from lightning.pytorch.loggers.tensorboard import TensorBoardLogger as _TensorBoardLogger
 from tbparse import SummaryReader
 from torch import Tensor
-from torch.nn.functional import cross_entropy, nll_loss
 from torch.optim.adamw import AdamW
 from transformers import PreTrainedModel, PreTrainedTokenizerFast  # type: ignore
 from transformers.models.llama.configuration_llama import LlamaConfig
@@ -103,84 +102,35 @@ class OptimCofig(DictConfig):
             assert self.scheduler_name in TYPE_TO_SCHEDULER_FUNCTION
 
 
-class CrossEntropyWithZLoss(torch.nn.Module):
-    """ZLoss is a modified CrossEntropyLoss.
-
-    When z_loss=0: they are equivalent. z_loss encourages the logits:
-    - to not drift too far from zero (which can cause unacceptable roundoff errors in bfloat16)
-    - to be normalized log-probabilities
-    Based on t5x and mesh_tensorflow implementations:
-    https://github.com/google-research/t5x/blob/77d2624e65799e3bea15586eb1d3fe7c63477a92/t5x/models.py#L738
-    https://github.com/google-research/t5x/blob/0728d8429041d6c6e75077334e76eb2370c6057b/t5x/losses.py#L50
-    https://github.com/tensorflow/mesh/blob/fa19d69eafc9a482aff0b59ddd96b025c0cb207d/mesh_tensorflow/layers.py#L666
-    and https://github.com/Birch-san/z-loss-pytorch/blob/main/z_loss.py
-    """
-
-    def __init__(
-        self,
-        ignore_index: int = -100,
-        reduction: Literal["mean", "sum", "none"] = "mean",
-        zloss_factor: float | None = None,
-    ) -> None:
-        super().__init__()
-        self.ignore_index = ignore_index
-
-        assert reduction in {"mean", "sum", "none"}, f"Invalid reduction: {reduction}"
-        self.reduction = reduction
-
-        assert zloss_factor is None or (isinstance(zloss_factor, float) and zloss_factor >= 0), (
-            f"Invalid zloss_factor: {zloss_factor}"
-        )
-        self.zloss_factor = zloss_factor
-
-    def forward(self, logits: torch.FloatTensor, labels: torch.LongTensor) -> Tensor:
-        """To keep the interface similar to the original cross_entropy, we expect flattened logits and labels.
-
-        logits: (B, V), labels: (B,)
-        """
-        # log_z = logits.logsumexp(dim=-1)  # (B, T, V) -> (B, T)
-        # log_softmax = logits - log_z.unsqueeze(-1)  # (B, T, V) - (B, T, 1) -> (B, T, V)
-        # loss = nll_loss(log_softmax.flatten(end_dim=-2), labels.flatten(), ignore_index=self.ignore_index, reduction='none')  # (B, T, V) -> (B, T)
-        # loss = loss.unflatten(0, labels.shape)  # (B, T)
-        log_z = logits.logsumexp(dim=-1)  # (B,)
-        log_softmax = logits - log_z.unsqueeze(-1)  # (B, V)
-        loss = nll_loss(log_softmax, labels, ignore_index=self.ignore_index, reduction="none")  # (B,)
-
-        if self.zloss_factor is not None:
-            log_z.masked_fill_(labels == self.ignore_index, 0)
-            loss += self.zloss_factor * log_z.pow(2)
-
-        if self.reduction == "none":
-            return loss
-
-        loss = loss.sum()
-        if self.reduction == "sum":
-            return loss
-
-        nonignored_token_count = labels.numel() - (labels == self.ignore_index).sum()
-        loss /= nonignored_token_count
-        return loss
-
-
 class LanguageModel(LightningModule):
-    def __init__(self, config: dict, optim_config: OptimCofig, use_torch_compile: bool = False) -> None:
+    def __init__(
+        self, config: dict, optim_config: OptimCofig, use_torch_compile: bool = False, use_liger: bool = False
+    ) -> None:
         super().__init__()
         # Asking for config to be dict so that lightning saves it in the checkpoint without problems
         self.config = Qwen3Config(**config) if config["model_type"] == "qwen3" else LlamaConfig(**config)
         self.optim_config = optim_config
         self.use_torch_compile = use_torch_compile
+        self.use_liger = use_liger
         self.save_hyperparameters()
-
-        self.loss_fn = (
-            CrossEntropyWithZLoss(zloss_factor=self.optim_config.zloss_factor)
-            if self.optim_config.zloss_factor is not None
-            else cross_entropy
-        )
 
     def configure_model(self) -> None:
         self.model = (
             LlamaForCausalLM(self.config) if self.config.model_type == "llama" else Qwen3ForCausalLM(self.config)
         )
+
+        if self.use_liger:
+            apply_liger_kernel = (
+                apply_liger_kernel_to_llama if self.config.model_type == "llama" else apply_liger_kernel_to_qwen3
+            )
+            apply_liger_kernel(
+                rope=True,
+                cross_entropy=True,
+                fused_linear_cross_entropy=False,
+                rms_norm=True,
+                swiglu=True,
+                model=self.model,
+            )
 
         if self.use_torch_compile or self.config._attn_implementation == "flex_attention":
             logger.info("Using torch.compile. This is triggered even if you set it to False but use flex_attention.")
@@ -207,26 +157,27 @@ class LanguageModel(LightningModule):
         return self.model.forward(input_ids=input_ids, **kwargs).logits  # type: ignore
 
     def step(self, batch: dict[str, Tensor], stage: RunningStage) -> Tensor | None:
-        input_ids = batch["input_ids"][..., :-1].contiguous()
-        att_mask = batch["att_mask"][..., :-1].contiguous() if "att_mask" in batch else None
-        labels = batch["input_ids"][..., 1:].contiguous()
-        logits = self.forward(input_ids=input_ids, attention_mask=att_mask)
-        logits = logits.float()  # Upcast to float to avoid potential precision issues
-        loss = self.loss_fn(logits.view(-1, logits.size(-1)), labels.view(-1))
-
-        # Above is functionally equivalent to this below
-        # out = self.model(
-        #     input_ids=batch["input_ids"],
-        #     labels=batch["input_ids"].clone(),
-        #     attention_mask=batch.get("att_mask")  # type: ignore
-        # )  # type: ignore
-        # loss = out.loss
+        # input_ids = batch["input_ids"][..., :-1].contiguous()
+        # att_mask = batch["att_mask"][..., :-1].contiguous() if "att_mask" in batch else None
+        # labels = batch["input_ids"][..., 1:].contiguous()
+        # logits = self.forward(input_ids=input_ids, attention_mask=att_mask)
+        # logits = logits.float()  # Upcast to float to avoid potential precision issues
+        # loss = cross_entropy(logits.view(-1, logits.size(-1)), labels.view(-1))
+        # =====================================================================================================
+        # Above is functionally equivalent to this below, but HF implements it with padding instead of indexing
+        # which, strangely enough, is faster and more memory-efficient than indexing + .contiguous().
+        # =====================================================================================================
+        out = self.model(
+            input_ids=batch["input_ids"], labels=batch["input_ids"].clone(), attention_mask=batch.get("att_mask")
+        )
+        loss = out.loss
         logs = {"loss": loss.detach()}
-
-        # if self.optim_config.zloss_lambda is not None:
-        #     zloss = torch.logsumexp(logits, dim=-1).pow(2).mean()
-        #     loss = loss + (self.optim_config.zloss_lambda * zloss)
-        #     logs["zloss"] = zloss.detach()
+        if self.optim_config.zloss_factor is not None:
+            logits = out.logits
+            zloss = logits.logsumexp(dim=-1).pow(2).mean()
+            loss += self.optim_config.zloss_factor * zloss
+            logs["zloss"] = zloss.detach()
+            logs["total_loss"] = loss.detach()
 
         self.log_dict(
             {f"{stage}/{k}": v for k, v in logs.items()},
@@ -302,3 +253,88 @@ class TensorBoardLogger(_TensorBoardLogger):
 
     def save_to_parquet(self, path: str | Path) -> None:
         SummaryReader(str(self.log_dir)).scalars.to_parquet(path)
+
+
+# =====================================================================================================================
+# I tried the approach but it is slower and more memory-intensive because it's implementing log-softmax + NLL manually,
+# whereas torch.nn.functional.cross_entropy is a fused and highly optimized kernel (implemented in C++) that combines
+# log_softmax and nll_loss to avoid intermediate allocations and save memory.
+# =====================================================================================================================
+# class CrossEntropyWithZLoss(torch.nn.Module):
+#     """ZLoss is a modified CrossEntropyLoss.
+
+#     When z_loss=0: they are equivalent. z_loss encourages the logits:
+#     - to not drift too far from zero (which can cause unacceptable roundoff errors in bfloat16)
+#     - to be normalized log-probabilities
+#     Based on t5x and mesh_tensorflow implementations:
+#     https://github.com/google-research/t5x/blob/77d2624e65799e3bea15586eb1d3fe7c63477a92/t5x/models.py#L738
+#     https://github.com/google-research/t5x/blob/0728d8429041d6c6e75077334e76eb2370c6057b/t5x/losses.py#L50
+#     https://github.com/tensorflow/mesh/blob/fa19d69eafc9a482aff0b59ddd96b025c0cb207d/mesh_tensorflow/layers.py#L666
+#     and https://github.com/Birch-san/z-loss-pytorch/blob/main/z_loss.py
+#     """
+
+#     def __init__(
+#         self,
+#         ignore_index: int = -100,
+#         reduction: Literal["mean", "sum", "none"] = "mean",
+#         zloss_factor: float | None = None,
+#     ) -> None:
+#         super().__init__()
+#         self.ignore_index = ignore_index
+
+#         assert reduction in {"mean", "sum", "none"}, f"Invalid reduction: {reduction}"
+#         self.reduction = reduction
+
+#         assert zloss_factor is None or (isinstance(zloss_factor, float) and zloss_factor >= 0), (
+#             f"Invalid zloss_factor: {zloss_factor}"
+#         )
+#         self.zloss_factor = zloss_factor
+
+#     def forward(self, logits: torch.FloatTensor, labels: torch.LongTensor) -> Tensor:
+#         """To keep the interface similar to the original cross_entropy, we expect flattened logits and labels.
+
+#         logits: (B, V), labels: (B,)
+#         """
+#         # log_z = logits.logsumexp(dim=-1)  # (B, T, V) -> (B, T)
+#         # log_softmax = logits - log_z.unsqueeze(-1)  # (B, T, V) - (B, T, 1) -> (B, T, V)
+#         # loss = nll_loss(log_softmax.flatten(end_dim=-2), labels.flatten(), ignore_index=self.ignore_index, reduction='none')  # (B, T, V) -> (B, T)
+#         # loss = loss.unflatten(0, labels.shape)  # (B, T)
+#         log_z = logits.logsumexp(dim=-1)  # (B,)
+#         log_softmax = logits - log_z.unsqueeze(-1)  # (B, V)
+#         loss = nll_loss(log_softmax, labels, ignore_index=self.ignore_index, reduction="none")  # (B,)
+
+#         if self.zloss_factor is not None:
+#             zloss = log_z.masked_fill(labels == self.ignore_index, 0).pow(2)
+#             loss += self.zloss_factor * zloss
+
+#         if self.reduction == "none":
+#             return loss
+
+#         loss = loss.sum()
+#         if self.reduction == "sum":
+#             return loss
+
+#         nonignored_token_count = labels.numel() - (labels == self.ignore_index).sum()
+#         loss /= nonignored_token_count
+#         return loss
+
+
+# def zloss_with_logs(logits: Tensor, labels: Tensor, zloss_factor: float) -> tuple[Tensor, dict]:
+#     log_z = logits.logsumexp(dim=-1)  # (B,)
+#     log_softmax = logits - log_z.unsqueeze(-1)  # (B, V)
+#     loss = nll_loss(log_softmax, labels, ignore_index=-100, reduction="mean")  # (B,)
+#     logs = {"loss": loss.detach()}
+
+#     zloss = log_z[labels != -100].pow(2).mean()
+#     logs["z_loss"] = zloss.detach()
+
+#     loss += zloss_factor * zloss
+#     logs["total_loss"] = loss.detach()
+
+#     return loss, logs
+
+
+# def cross_entropy_with_logs(logits: Tensor, labels: Tensor) -> tuple[Tensor, dict]:
+#     """A simple cross entropy loss with zloss factor, returning the loss and logs."""
+#     loss = cross_entropy(logits, labels, ignore_index=-100, reduction="mean")
+#     return loss, {"loss": loss.detach()}
