@@ -28,9 +28,11 @@ class SpeedMonitor(Callback):
         for pl_logger in trainer.loggers:
             pl_logger.log_metrics({f"{self.PREFIX}/{stage}_batch (ms)": runtime * 1000}, step=trainer.global_step)
 
+    @rank_zero_only
     def on_fit_start(self, *args, **kwargs) -> None:
         self.fit_start = time.time()
 
+    @rank_zero_only
     def on_fit_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
         self.fit_end = time.time()
         runtime = self.fit_end - self.fit_start
@@ -41,9 +43,11 @@ class SpeedMonitor(Callback):
     Epoch start
     """
 
+    @rank_zero_only
     def on_train_epoch_start(self, *args, **kwargs) -> None:
         self.epoch_start(RunningStage.TRAIN)
 
+    @rank_zero_only
     def on_validation_epoch_start(self, *args, **kwargs) -> None:
         self.epoch_start(RunningStage.VALIDATION)
 

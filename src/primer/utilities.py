@@ -14,6 +14,7 @@ import polars as pl
 import srsly
 from huggingface_hub import whoami
 from hydra.utils import instantiate
+from lightning.pytorch.utilities.rank_zero import rank_zero_only
 from omegaconf import OmegaConf
 from rich import print
 from rich.logging import RichHandler
@@ -86,6 +87,13 @@ def get_logger(
     )
     logger.addHandler(handler)
     logger.propagate = False
+
+    # Ensure that the logger only logs messages from rank 0 in distributed training
+    logger.debug = rank_zero_only(logger.debug)
+    logger.info = rank_zero_only(logger.info)
+    logger.warning = rank_zero_only(logger.warning)
+    logger.error = rank_zero_only(logger.error)
+    logger.critical = rank_zero_only(logger.critical)
 
     if rich:
         logger = add_rich_handler(logger)
