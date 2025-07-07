@@ -125,8 +125,8 @@ class LanguageModel(LightningModule):
             )
             apply_liger_kernel(
                 rope=True,
-                cross_entropy=True,
-                fused_linear_cross_entropy=False,
+                cross_entropy=False,
+                fused_linear_cross_entropy=True,
                 rms_norm=True,
                 swiglu=True,
                 model=self.model,
@@ -187,7 +187,6 @@ class LanguageModel(LightningModule):
             logger=True,
             batch_size=batch["input_ids"].shape[0],
             sync_dist=True,
-            rank_zero_only=True,
         )
 
         if stage == RunningStage.TRAIN:
