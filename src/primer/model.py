@@ -40,7 +40,7 @@ def get_model_config(model_config: dict, tok: PreTrainedTokenizerFast, use_flex_
         "eos_token_id": tok.eos_token_id,  # type: ignore
         "pad_token_id": tok.pad_token_id,  # type: ignore
         "torch_dtype": "bfloat16",
-        "use_cache": True,
+        "use_cache": False,  # In training, we don't need to use cache
         "max_position_embeddings": 2048,
         "_attn_implementation": attn_implementation,
     }
